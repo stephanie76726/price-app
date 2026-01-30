@@ -23,6 +23,8 @@
         .custom-radio:checked + div .radio-dot { border-color: #4f46e5; border-width: 5px; }
         /* 模式切換按鈕動畫 */
         .mode-btn { transition: all 0.2s ease; }
+        .animate-fade-in { animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
     </style>
 </head>
 <body class="text-slate-800">
@@ -115,6 +117,9 @@
 
             const fmt = (num) => num ? new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 0 }).format(num) : '-';
 
+            // 檢查詳細模式欄位是否填滿
+            const isDetailFilled = detailMaterial !== '' && detailTime !== '' && detailRate !== '';
+
             // 當切換到 LAN 時，強制切回直接輸入模式
             useEffect(() => {
                 if (productType === 'lan') {
@@ -143,36 +148,36 @@
 
             // 計算核心
             useEffect(() => {
-                // 如果是詳細計算模式，忽略 costTWD 和 costUSD 輸入框的值 (視為 0)
-                const cTWD = (costCalcMode === 'direct') ? (parseFloat(costTWD) || 0) : 0;
-                const cUSD = (costCalcMode === 'direct') ? ((parseFloat(costUSD) || 0) * rateUSD) : 0;
-                
-                let calculatedRMB = 0;
+                let currentTotalTWD = 0;
 
                 if (costCalcMode === 'direct') {
                     // 直接輸入模式
-                    calculatedRMB = parseFloat(costRMB) || 0;
+                    const cTWD = parseFloat(costTWD) || 0;
+                    const cUSD = (parseFloat(costUSD) || 0) * rateUSD;
+                    const rawRMB = parseFloat(costRMB) || 0;
+                    const effectiveRMB = rmbTaxType === 'taxed' ? rawRMB / 1.13 : rawRMB;
+                    const cRMB = effectiveRMB * rateRMB;
+                    currentTotalTWD = cTWD + cUSD + cRMB;
                 } else {
-                    // 詳細計算模式：材料 + (工時/3600 * 制工費)
-                    const mat = parseFloat(detailMaterial) || 0;
-                    const time = parseFloat(detailTime) || 0;
-                    const rate = parseFloat(detailRate) || 0;
-                    const laborCost = (time / 3600) * rate;
-                    calculatedRMB = mat + laborCost;
+                    // 詳細計算模式：嚴格檢查欄位是否填滿
+                    if (isDetailFilled) {
+                        const mat = parseFloat(detailMaterial) || 0;
+                        const time = parseFloat(detailTime) || 0;
+                        const laborRate = parseFloat(detailRate) || 0;
+                        const rawRMB = mat + (time / 3600 * laborRate);
+                        const effectiveRMB = rmbTaxType === 'taxed' ? rawRMB / 1.13 : rawRMB;
+                        currentTotalTWD = effectiveRMB * rateRMB;
+                    } else {
+                        currentTotalTWD = 0; // 只要有一格沒填，總成本就是 0，不顯示結果
+                    }
                 }
 
-                let effectiveRMB = rmbTaxType === 'taxed' ? calculatedRMB / 1.13 : calculatedRMB;
-                const cRMB = effectiveRMB * rateRMB;
+                setTotalCostTWD(currentTotalTWD);
 
-                const total = cTWD + cUSD + cRMB;
-                setTotalCostTWD(total);
-
-                if (total > 0) {
-                    // 根據產品類型設定基礎毛利
+                if (currentTotalTWD > 0) {
                     const baseMargin = productType === 'lan' ? 0.20 : 0.33;
-
                     const calcPrice = (marginPercent) => {
-                        const basePriceTWD = total / (1 - marginPercent);
+                        const basePriceTWD = currentTotalTWD / (1 - marginPercent);
                         return {
                             twd: Math.ceil(basePriceTWD * 1.05),
                             usd: (basePriceTWD / rateUSD).toFixed(2),
@@ -182,17 +187,17 @@
                     };
 
                     setCalculations({
-                        low: calcPrice(baseMargin),             // 基準
-                        mid: calcPrice(baseMargin * 1.5),       // 1.5倍
-                        high: calcPrice(baseMargin * 2)         // 2倍
+                        low: calcPrice(baseMargin),
+                        mid: calcPrice(baseMargin * 1.5),
+                        high: calcPrice(baseMargin * 2)
                     });
                 } else {
                     setCalculations(null);
                 }
-            }, [costTWD, costUSD, costRMB, rmbTaxType, rateUSD, rateRMB, productType, costCalcMode, detailMaterial, detailTime, detailRate]); 
+            }, [costTWD, costUSD, costRMB, rmbTaxType, rateUSD, rateRMB, productType, costCalcMode, detailMaterial, detailTime, detailRate, isDetailFilled]); 
 
             const getCustomMarginResult = () => {
-                if (!customPrice || !totalCostTWD) return null;
+                if (!customPrice || totalCostTWD <= 0) return null;
                 const price = parseFloat(customPrice);
                 if (isNaN(price) || price <= 0) return null;
 
@@ -219,8 +224,8 @@
                 setCustomPrice(''); 
             };
 
-            // 輔助計算：詳細模式的 RMB 換算
-            const calcDetailRMB = (parseFloat(detailMaterial)||0) + ((parseFloat(detailTime)||0)/3600 * (parseFloat(detailRate)||0));
+            // 輔助計算：詳細模式的 RMB 總和
+            const calcDetailRMB = isDetailFilled ? (parseFloat(detailMaterial)||0) + ((parseFloat(detailTime)||0)/3600 * (parseFloat(detailRate)||0)) : 0;
             const calcDetailTWD = calcDetailRMB * rateRMB;
             const calcDetailUSD = calcDetailTWD / rateUSD;
 
@@ -240,7 +245,7 @@
 
                         {/* Settings */}
                         {showSettings && (
-                            <div className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-lg space-y-4">
+                            <div className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-lg space-y-4 animate-fade-in">
                                 <div className="flex items-center gap-2 text-indigo-600 border-b border-indigo-50 pb-2">
                                     <IconArrow />
                                     <h3 className="text-xs font-bold uppercase tracking-wider">手動匯率設定</h3>
@@ -289,7 +294,7 @@
                                 <button onClick={handleReset} className="text-xs font-bold text-slate-400 flex items-center gap-1 bg-slate-100 px-2 py-1 rounded-md"><IconRefresh /> 重置</button>
                             </div>
 
-                            {/* Cost Mode Toggle */}
+                            {/* Mode Toggle */}
                             {productType === 'other' && (
                                 <div className="grid grid-cols-2 gap-2 mb-2">
                                     <button 
@@ -307,7 +312,7 @@
                                 </div>
                             )}
 
-                            {/* Detailed Calculation Section (Only in Detail Mode) */}
+                            {/* Calculation Area */}
                             {productType === 'other' && costCalcMode === 'detail' ? (
                                 <div className="space-y-3 bg-indigo-50/60 p-4 rounded-2xl border border-indigo-100 animate-fade-in mb-4">
                                     <div className="text-xs font-black text-indigo-400 uppercase tracking-widest mb-1">工時與材料 (RMB)</div>
@@ -322,32 +327,46 @@
                                             <input type="number" value={detailRate} onChange={(e) => setDetailRate(e.target.value)} className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-slate-700 shadow-sm" placeholder="費率" />
                                         </div>
                                     </div>
-                                    <div className="pt-3 border-t border-indigo-200/50 space-y-2">
-                                        <div className="flex justify-between items-center">
-                                            <span className="text-xs font-bold text-indigo-700">計算總合 (RMB)</span>
-                                            <span className="font-mono font-black text-indigo-600 text-xl">
-                                                ¥ {calcDetailRMB.toFixed(2)}
-                                            </span>
-                                        </div>
-                                        <div className="grid grid-cols-2 gap-2">
-                                            <div className="bg-white px-3 py-2 rounded-lg border border-indigo-100 flex flex-col items-center justify-center shadow-sm">
-                                                <span className="text-[9px] font-bold text-indigo-300 uppercase tracking-widest">折合 USD</span>
-                                                <span className="font-mono font-bold text-slate-600">$ {calcDetailUSD.toFixed(2)}</span>
+                                    
+                                    {/* 只有填滿三欄才顯示結果 */}
+                                    {isDetailFilled ? (
+                                        <div className="pt-3 border-t border-indigo-200/50 space-y-2 animate-fade-in">
+                                            <div className="flex justify-between items-center">
+                                                <span className="text-xs font-bold text-indigo-700">計算總合 (RMB)</span>
+                                                <span className="font-mono font-black text-indigo-600 text-xl">
+                                                    ¥ {calcDetailRMB.toFixed(2)}
+                                                </span>
                                             </div>
-                                            <div className="bg-white px-3 py-2 rounded-lg border border-indigo-100 flex flex-col items-center justify-center shadow-sm">
-                                                <span className="text-[9px] font-bold text-indigo-300 uppercase tracking-widest">折合 TWD</span>
-                                                <span className="font-mono font-bold text-slate-600">$ {Math.round(calcDetailTWD)}</span>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <div className="bg-white px-3 py-2 rounded-lg border border-indigo-100 flex flex-col items-center justify-center shadow-sm">
+                                                    <span className="text-[9px] font-bold text-indigo-300 uppercase tracking-widest">折合 USD</span>
+                                                    <span className="font-mono font-bold text-slate-600">$ {calcDetailUSD.toFixed(2)}</span>
+                                                </div>
+                                                <div className="bg-white px-3 py-2 rounded-lg border border-indigo-100 flex flex-col items-center justify-center shadow-sm">
+                                                    <span className="text-[9px] font-bold text-indigo-300 uppercase tracking-widest">折合 TWD</span>
+                                                    <span className="font-mono font-bold text-slate-600">$ {Math.round(calcDetailTWD)}</span>
+                                                </div>
                                             </div>
+                                            <div className="flex justify-end">
+                                                <div className="flex bg-slate-100 p-1 rounded-lg">
+                                                    <button onClick={() => setRmbTaxType('untaxed')} className={`px-3 py-1 text-[10px] rounded-md font-bold transition-all ${rmbTaxType === 'untaxed' ? 'bg-white shadow text-slate-800' : 'text-slate-400'}`}>未稅</button>
+                                                    <button onClick={() => setRmbTaxType('taxed')} className={`px-3 py-1 text-[10px] rounded-md font-bold transition-all ${rmbTaxType === 'taxed' ? 'bg-white shadow text-emerald-600' : 'text-slate-400'}`}>含稅</button>
+                                                </div>
+                                            </div>
+                                            {rmbTaxType === 'taxed' && (
+                                                <p className="text-[10px] text-emerald-600 text-right font-medium">
+                                                    *實際成本 (÷1.13): ¥{(calcDetailRMB / 1.13).toFixed(2)}
+                                                </p>
+                                            )}
                                         </div>
-                                        {rmbTaxType === 'taxed' && calcDetailRMB > 0 && (
-                                            <p className="text-[10px] text-emerald-600 text-right font-medium">
-                                                *實際成本 (÷1.13): ¥{(calcDetailRMB / 1.13).toFixed(2)}
-                                            </p>
-                                        )}
-                                    </div>
+                                    ) : (
+                                        <div className="pt-3 text-center">
+                                            <p className="text-[10px] text-slate-400 font-bold italic tracking-wider">請完整填寫以上三欄以計算成本</p>
+                                        </div>
+                                    )}
                                 </div>
                             ) : (
-                                /* Direct Input Mode: TWD -> USD -> RMB */
+                                /* Direct Mode: TWD -> USD -> RMB */
                                 <>
                                     <InputGroup label="台幣成本 (TWD)" value={costTWD} onChange={setCostTWD} prefix="NT$" />
                                     <InputGroup label="美金成本 (USD)" value={costUSD} onChange={setCostUSD} prefix="US$" />
@@ -362,28 +381,27 @@
                                                 <button onClick={() => setRmbTaxType('taxed')} className={`px-3 py-1 text-[10px] rounded-md font-bold transition-all ${rmbTaxType === 'taxed' ? 'bg-white shadow text-emerald-600' : 'text-slate-400'}`}>含稅</button>
                                             </div>
                                         </div>
-                                        <div className="relative animate-fade-in">
+                                        <div className="relative">
                                             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold">¥</span>
                                             <input type="number" value={costRMB} onChange={(e) => setCostRMB(e.target.value)} className="w-full pl-14 pr-3 py-2.5 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-slate-700 text-lg shadow-sm" placeholder="0.00" />
                                         </div>
-                                        {rmbTaxType === 'taxed' && costRMB > 0 && <p className="text-[10px] text-emerald-600 text-right font-medium">*實際成本 (÷1.13): ¥{parseFloat(costRMB / 1.13).toFixed(2)}</p>}
+                                        {rmbTaxType === 'taxed' && costRMB !== '' && <p className="text-[10px] text-emerald-600 text-right font-medium">*實際成本 (÷1.13): ¥{(parseFloat(costRMB) / 1.13).toFixed(2)}</p>}
                                     </div>
                                 </>
                             )}
-                            
                         </Card>
 
-                        {/* Total & Result */}
+                        {/* Results: Only visible when totalCostTWD > 0 */}
                         <div className="space-y-4 pb-10">
-                            <div className={`flex justify-between items-center px-2 text-white p-4 rounded-xl shadow-lg transition-colors ${productType === 'lan' ? 'bg-sky-600' : 'bg-slate-800'}`}>
-                                <span className="font-bold text-sm opacity-80">總成本 (USD)</span>
-                                <span className="text-2xl font-mono font-bold tracking-tight">
-                                    $ {totalCostTWD > 0 ? (totalCostTWD / rateUSD).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
-                                </span>
-                            </div>
+                            {totalCostTWD > 0 ? (
+                                <div className="space-y-4 animate-fade-in">
+                                    <div className={`flex justify-between items-center px-2 text-white p-4 rounded-xl shadow-lg transition-colors ${productType === 'lan' ? 'bg-sky-600' : 'bg-slate-800'}`}>
+                                        <span className="font-bold text-sm opacity-80">總成本 (USD)</span>
+                                        <span className="text-2xl font-mono font-bold tracking-tight">
+                                            $ {(totalCostTWD / rateUSD).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        </span>
+                                    </div>
 
-                            {totalCostTWD > 0 && (
-                                <div className="space-y-5">
                                     {/* Reverse Calc */}
                                     <Card className="p-4 border-2 border-emerald-100 bg-emerald-50/30">
                                         <div className="flex items-center gap-2 text-emerald-700 mb-3">
@@ -401,7 +419,7 @@
                                             </select>
                                         </div>
                                         {customResult ? (
-                                            <div className="bg-white rounded-lg p-3 border border-emerald-100 grid grid-cols-2 gap-4 shadow-sm">
+                                            <div className="bg-white rounded-lg p-3 border border-emerald-100 grid grid-cols-2 gap-4 shadow-sm animate-fade-in">
                                                 <div>
                                                     <div className="text-[10px] text-slate-400 mb-0.5 font-bold">預估毛利率</div>
                                                     <div className={`font-black text-xl ${customResult.margin < 0 ? 'text-red-500' : 'text-emerald-600'}`}>{customResult.margin.toFixed(2)}%</div>
@@ -411,7 +429,7 @@
                                                     <div className={`font-mono font-bold text-sm ${customResult.profit < 0 ? 'text-red-500' : 'text-slate-700'}`}>NT$ {new Intl.NumberFormat('zh-TW', { maximumFractionDigits: 0 }).format(customResult.profit)}</div>
                                                 </div>
                                             </div>
-                                        ) : <p className="text-[10px] text-slate-400 text-center py-2 font-medium">輸入價格以計算實際毛利</p>}
+                                        ) : <p className="text-[10px] text-slate-400 text-center py-2 font-medium italic">輸入價格以計算實際毛利</p>}
                                     </Card>
 
                                     {/* Quote List */}
@@ -422,30 +440,38 @@
                                                 {productType === 'lan' ? 'LAN 網通建議報價 (20%起)' : '一般建議報價 (33%起)'}
                                             </span>
                                         </div>
-                                        <ResultRow 
-                                            label={calculations.low.label}
-                                            twd={`NT$ ${fmt(calculations.low.twd)}`} 
-                                            usd={`$ ${calculations.low.usd}`} 
-                                            rmb={`¥ ${calculations.low.rmb}`} 
-                                        />
-                                        <ResultRow 
-                                            label={calculations.mid.label}
-                                            twd={`NT$ ${fmt(calculations.mid.twd)}`} 
-                                            usd={`$ ${calculations.mid.usd}`} 
-                                            rmb={`¥ ${calculations.mid.rmb}`} 
-                                            highlight={true} 
-                                        />
-                                        <ResultRow 
-                                            label={calculations.high.label}
-                                            twd={`NT$ ${fmt(calculations.high.twd)}`} 
-                                            usd={`$ ${calculations.high.usd}`} 
-                                            rmb={`¥ ${calculations.high.rmb}`} 
-                                        />
+                                        {calculations && (
+                                            <>
+                                                <ResultRow 
+                                                    label={calculations.low.label}
+                                                    twd={`NT$ ${fmt(calculations.low.twd)}`} 
+                                                    usd={`$ ${calculations.low.usd}`} 
+                                                    rmb={`¥ ${calculations.low.rmb}`} 
+                                                />
+                                                <ResultRow 
+                                                    label={calculations.mid.label}
+                                                    twd={`NT$ ${fmt(calculations.mid.twd)}`} 
+                                                    usd={`$ ${calculations.mid.usd}`} 
+                                                    rmb={`¥ ${calculations.mid.rmb}`} 
+                                                    highlight={true} 
+                                                />
+                                                <ResultRow 
+                                                    label={calculations.high.label}
+                                                    twd={`NT$ ${fmt(calculations.high.twd)}`} 
+                                                    usd={`$ ${calculations.high.usd}`} 
+                                                    rmb={`¥ ${calculations.high.rmb}`} 
+                                                />
+                                            </>
+                                        )}
                                     </div>
                                     <div className="flex gap-2 p-3 bg-blue-50 text-blue-700 text-[10px] rounded-lg font-medium">
                                         <IconInfo />
                                         <p>台幣報價含5%稅，總成本顯示為USD。</p>
                                     </div>
+                                </div>
+                            ) : (
+                                <div className="py-12 text-center text-slate-300">
+                                    <p className="text-sm font-bold tracking-widest">等待輸入完整成本數據...</p>
                                 </div>
                             )}
                         </div>
